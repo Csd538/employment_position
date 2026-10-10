@@ -1,12 +1,15 @@
 import asyncio
 import json
 import logging
-import os
 import traceback
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 # debug模式
 DEBUG = False
+
+# 项目根目录下的默认日志目录。
+DEFAULT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
 
 
 class StructuredLogFormatter(logging.Formatter):
@@ -52,12 +55,13 @@ class StructuredLogFormatter(logging.Formatter):
         }
 
         return json.dumps(
-            {k: v for k, v in log_data.items() if v is not None},
+            {key: value for key, value in log_data.items() if value is not None},
             ensure_ascii=False,
             default=self._json_serializer,
         )
 
-    def _json_serializer(self, obj):
+    @staticmethod
+    def _json_serializer(obj):
         """JSON序列化钩子函数"""
         if isinstance(obj, datetime | timedelta):
             return str(obj)
@@ -65,7 +69,8 @@ class StructuredLogFormatter(logging.Formatter):
             return vars(obj)
         return f"<不可序列化对象: {type(obj).__name__}>"
 
-    def _format_exception(self, tb):
+    @staticmethod
+    def _format_exception(tb):
         """格式化异常堆栈"""
         return "".join(traceback.format_tb(tb))
 
@@ -81,35 +86,30 @@ class StructuredLogFormatter(logging.Formatter):
 def setup_logger(
     system: str = "default_system",
     stage: str = "default_stage",
-    log_file_path: str | None = None,
+    log_file_path: str | Path | None = None,
 ) -> logging.Logger:
-    """
-    初始化日志系统
-    Args:
-        system: 系统标识
-        stage: 阶段标识
-        log_file_path: 日志文件路径
-        debug_mode: 是否调试模式
-    Returns:
-        配置完成的日志记录器
-    """
+    """创建同时输出到控制台和日志文件的日志记录器。"""
     logger = logging.getLogger(f"{system}.{stage}")
     logger.setLevel(logging.DEBUG if DEBUG else logging.INFO)
+    logger.propagate = False
 
-    if not logger.handlers:
-        # 创建格式化器
-        formatter = StructuredLogFormatter(system=system, stage=stage)
+    if logger.handlers:
+        return logger
 
-        # 控制台处理器
-        ch = logging.StreamHandler()
-        ch.setFormatter(formatter)
-        logger.addHandler(ch)
+    formatter = StructuredLogFormatter(system=system, stage=stage)
 
-        # 文件处理器（如果提供路径）
-        if log_file_path:
-            os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
-            fh = logging.FileHandler(log_file_path, encoding="utf-8")
-            fh.setFormatter(formatter)
-            logger.addHandler(fh)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    log_path = (
+        Path(log_file_path)
+        if log_file_path
+        else DEFAULT_LOG_DIR / f"{stage}.log"
+    )
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
 
     return logger

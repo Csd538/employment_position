@@ -2,69 +2,106 @@
 
 # ------------------------------ HTTP 通用配置 ------------------------------
 
-# 请求超时（秒）
+# 单次 HTTP 请求的超时时间，单位为秒。
 DEFAULT_TIMEOUT = 20
 
-# 重试次数
+# HTTP 请求和岗位数据库写入失败后的最大尝试次数，包含第一次执行。
 RETRY_ATTEMPTS = 5
 
-# 重试间隔（秒）
+# 两次重试之间的固定等待时间，单位为秒。
 RETRY_WAIT_SECONDS = 1
 
 # ------------------------------ 数据库配置 ------------------------------
 
+# SQLAlchemy 连接在连接池中的回收时间，单位为秒，用于减少失效长连接。
 DB_POOL_RECYCLE_SECONDS = 1800
 
+# 岗位数据表名称。
 POSITION_TABLE_NAME = "employment_position"
+
+# 企业详情数据表名称。
 COMPANY_TABLE_NAME = "employment_recruitment_company"
 
+# 岗位表中的岗位唯一业务 ID 字段，对应接口字段 bcb009。
 POSITION_ID_COLUMN = "position_id"
+
+# 岗位表中的企业业务 ID 字段，对应接口字段 aab001。
 POSITION_COMPANY_ID_COLUMN = "company_id"
+
+# 岗位表中的企业详情 ID 字段，对应接口字段 bbb911。
 POSITION_COMPANY_DETAIL_COLUMN = "company_detail_id"
+
+# 岗位表中的企业名称字段。
 POSITION_COMPANY_NAME_COLUMN = "company_name"
+
+# 岗位表中的信息来源代码字段，对应接口字段 bze433。
 POSITION_INFORMATION_SOURCE_COLUMN = "information_source_id"
+
+# 岗位表中的信息来源名称字段。
 POSITION_SOURCE_NAME_COLUMN = "information_source"
+
+# 岗位表中的在招状态字段：1 表示在招，0 表示已下架。
 POSITION_ACTIVE_COLUMN = "is_active"
 
 # ------------------------------ 岗位列表抓取 ------------------------------
 
-# 招聘岗位接口每页数量
+# 岗位列表接口每页请求的记录数。
 POSITION_PAGE_SIZE = 200
 
-# 每批并发抓取页数
+# 每轮同时发起请求的岗位列表页数。
 POSITION_BATCH_SIZE = 10
 
-# 完成一批岗位列表页面后的等待时间（秒）
+# 同时处理的省份数量；1 表示按照 PROVINCES 的顺序逐省处理。
+POSITION_PROVINCE_CONCURRENCY = 1
+
+# 每轮岗位列表页面抓取完成后的等待时间，单位为秒；0 表示不等待。
 POSITION_BATCH_INTERVAL_SECONDS = 0.5
 
-# 岗位列表抓完后，访问公开详情接口补充 acb22a 岗位要求
+# 同时请求岗位详情接口的最大任务数，用于补充岗位要求 acb22a。
 POSITION_DETAIL_CONCURRENCY = 10
+
+# 每轮提交处理的岗位详情数量。
 POSITION_DETAIL_BATCH_SIZE = 100
+
+# 每次岗位详情请求结束后的等待时间，单位为秒；0 表示不等待。
 POSITION_DETAIL_REQUEST_INTERVAL_SECONDS = 0.3
 
-# 安全页数上限，正常情况下会在遇到最后一页时提前停止
+# 单个省份允许抓取的最大页数，防止接口异常时无限翻页。
 POSITION_MAX_PAGES = 10000
-
-# Excel 输出目录
-POSITION_OUTPUT_DIR = "output"
 
 # ------------------------------ 企业详情抓取 ------------------------------
 
+# 同时请求企业详情接口的最大任务数。
 COMPANY_CONCURRENCY = 10
+
+# 每轮抓取并写入数据库的企业数量。
 COMPANY_BATCH_SIZE = 100
+
+# 每次企业详情请求结束后的等待时间，单位为秒；0 表示不等待。
 COMPANY_REQUEST_INTERVAL_SECONDS = 0.3
+
+# 企业详情的重新抓取周期，单位为天；小于等于 0 时每次运行都刷新。
 COMPANY_REFRESH_DAYS = 30
+
+# 企业详情访问预检的抽样数量；当前脚本暂未使用，保留供预检功能使用。
 COMPANY_ACCESS_PREFLIGHT_LIMIT = 5
 
 # ------------------------------ 岗位状态检查 ------------------------------
 
+# 同时请求岗位详情接口检查在招状态的最大任务数。
 POSITION_CHECK_CONCURRENCY = 10
+
+# 每轮检查并更新状态的岗位数量。
 POSITION_CHECK_BATCH_SIZE = 100
+
+# 每次岗位状态请求结束后的等待时间，单位为秒；0 表示不等待。
 POSITION_CHECK_REQUEST_INTERVAL_SECONDS = 0.3
+
+# 岗位状态访问预检的抽样数量；当前脚本暂未使用，保留供预检功能使用。
 POSITION_ACCESS_PREFLIGHT_LIMIT = 5
 
-# 省级统计用区划代码（12位）。
-# 程序会按列表顺序逐省抓取；如只想抓部分省份，可删除或注释其他项。
+# 需要抓取的省级行政区及其 12 位区划代码。
+# 程序按照列表顺序调度；如只抓取部分省份，可删除或注释对应列表项。
 PROVINCES = [
     ("北京市", "110000000000"),
     ("天津市", "120000000000"),

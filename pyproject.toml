@@ -5,9 +5,15 @@ requires-python = ">=3.12"
 dependencies = [
     "cryptography>=50.0.2",
     "httpx>=0.28.1",
-    "openpyxl>=3.1.5",
     "pymysql>=1.2.3",
     "python-dotenv>=1.2.4",
     "sqlalchemy>=2.1.4",
     "tenacity>=9.2.1",
 ]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

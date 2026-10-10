@@ -1,22 +1,19 @@
+import contextlib
 import hashlib
 import os
 import ssl
-from typing import Any
-
-from dotenv import load_dotenv
-
-load_dotenv()
-
-import contextlib
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
+from dotenv import load_dotenv
+from tenacity import retry, stop_after_attempt, wait_fixed
 
-from util.config import (
+from employment_position.util.config import (
     DEFAULT_TIMEOUT,
     RETRY_ATTEMPTS,
     RETRY_WAIT_SECONDS,
 )
+
+load_dotenv()
 
 # 允许旧版 TLS 重协商（部分政府站点需要）
 _SSL_CTX = ssl.create_default_context()
@@ -47,7 +44,6 @@ with contextlib.suppress(Exception):
 with contextlib.suppress(Exception):
     _SSL_CTX.set_ecdh_curve("prime256v1")
 
-_SSL_CTX.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
 TUNNEL_PROXY_SERVER = os.getenv("TUNNEL_PROXY_SERVER")
 TUNNEL_PROXY_USERNAME = os.getenv("TUNNEL_PROXY_USERNAME")
 TUNNEL_PROXY_PASSWORD = os.getenv("TUNNEL_PROXY_PASSWORD")
@@ -57,24 +53,22 @@ TUNNEL_PROXY = (
     else None
 )
 
+# 配置代理发生传输错误而直连成功后，本次进程不再重复使用失效代理。
+_proxy_disabled = False
 
-@retry(
-    stop=stop_after_attempt(RETRY_ATTEMPTS),
-    wait=wait_fixed(RETRY_WAIT_SECONDS),
-)
-async def async_request_with_proxy(
+
+async def _request(
     method,
     url,
-    headers=None,
-    data=None,
-    cookies=None,
-    json=None,
-    params=None,
-    proxy=TUNNEL_PROXY,
-    trust_env=False,
-    _verify: bool | Any = False,
-    timeout=DEFAULT_TIMEOUT,
-    follow_redirects=True,
+    headers,
+    data,
+    cookies,
+    json,
+    params,
+    proxy,
+    trust_env,
+    timeout,
+    follow_redirects,
 ):
     async with httpx.AsyncClient(
         proxy=proxy,
@@ -94,6 +88,52 @@ async def async_request_with_proxy(
         )
         response.raise_for_status()
         return response
+
+
+@retry(
+    stop=stop_after_attempt(RETRY_ATTEMPTS),
+    wait=wait_fixed(RETRY_WAIT_SECONDS),
+    reraise=True,
+)
+async def async_request_with_proxy(
+    method,
+    url,
+    headers=None,
+    data=None,
+    cookies=None,
+    json=None,
+    params=None,
+    proxy=TUNNEL_PROXY,
+    trust_env=False,
+    timeout=DEFAULT_TIMEOUT,
+    follow_redirects=True,
+):
+    global _proxy_disabled
+
+    active_proxy = None if proxy == TUNNEL_PROXY and _proxy_disabled else proxy
+    arguments = {
+        "method": method,
+        "url": url,
+        "headers": headers,
+        "data": data,
+        "cookies": cookies,
+        "json": json,
+        "params": params,
+        "trust_env": trust_env,
+        "timeout": timeout,
+        "follow_redirects": follow_redirects,
+    }
+
+    try:
+        return await _request(proxy=active_proxy, **arguments)
+    except httpx.TransportError:
+        if not active_proxy:
+            raise
+
+    response = await _request(proxy=None, **arguments)
+    if proxy == TUNNEL_PROXY:
+        _proxy_disabled = True
+    return response
 
 
 def md5(string: str) -> str:
