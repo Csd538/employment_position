@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from dotenv import load_dotenv
-from sqlalchemy import URL, create_engine, text
+from sqlalchemy import URL, bindparam, create_engine, text
 from sqlalchemy.engine import Engine
 from tenacity import retry, stop_after_attempt, wait_fixed
 
@@ -24,6 +24,10 @@ from employment_position.util.config import (
     POSITION_TABLE_NAME,
     RETRY_ATTEMPTS,
     RETRY_WAIT_SECONDS,
+    SOURCE_COMPANY_NAME_COLUMN,
+    SOURCE_COMPANY_TABLE_NAME,
+    SOURCE_COMPANY_TYPE_COLUMN,
+    SOURCE_CREDIT_CODE_COLUMN,
 )
 
 load_dotenv()
@@ -45,6 +49,24 @@ def create_database_engine() -> Engine:
         host=require_env("DB_MYSQL_TEST_11_HOST"),
         port=int(require_env("DB_MYSQL_TEST_11_PORT")),
         database=require_env("DB_MYSQL_TEST_11_DATABASE"),
+        query={"charset": "utf8mb4"},
+    )
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        pool_recycle=DB_POOL_RECYCLE_SECONDS,
+    )
+
+
+def create_source_database_engine() -> Engine:
+    """连接正式库，仅用于只读查询企业工商信息。"""
+    url = URL.create(
+        drivername="mysql+pymysql",
+        username=require_env("DB_MYSQL_NEW_USER"),
+        password=require_env("DB_MYSQL_NEW_PASSWORD"),
+        host=require_env("DB_MYSQL_NEW_HOST"),
+        port=int(require_env("DB_MYSQL_NEW_PORT")),
+        database=require_env("DB_MYSQL_NEW_DATABASE"),
         query={"charset": "utf8mb4"},
     )
     return create_engine(
@@ -85,6 +107,7 @@ POSITION_COLUMN_MAPPING = {
     "学历要求": "education_requirement",
     "工作经验要求": "experience_requirement",
     "工作性质": "employment_type",
+    "招聘类型": "recruitment_type",
     "招聘人数": "recruitment_number",
     "福利待遇": "benefits",
     "信息来源": "information_source",
@@ -138,14 +161,15 @@ def upsert_positions(
             position_name, company_name, industry, region, skill_requirements,
             position_requirements, salary_range, publish_time, position_id,
             company_id, company_detail_id, link, education_requirement,
-            experience_requirement, employment_type, recruitment_number,
+            experience_requirement, employment_type, recruitment_type,
+            recruitment_number,
             benefits, information_source, information_source_id, is_active
         ) VALUES (
             :position_name, :company_name, :industry, :region,
             :skill_requirements, :position_requirements, :salary_range,
             :publish_time, :position_id, :company_id, :company_detail_id,
             :link, :education_requirement, :experience_requirement,
-            :employment_type, :recruitment_number, :benefits,
+            :employment_type, :recruitment_type, :recruitment_number, :benefits,
             :information_source, :information_source_id, :is_active
         )
         ON DUPLICATE KEY UPDATE
@@ -163,6 +187,7 @@ def upsert_positions(
             education_requirement = VALUES(education_requirement),
             experience_requirement = VALUES(experience_requirement),
             employment_type = VALUES(employment_type),
+            recruitment_type = VALUES(recruitment_type),
             recruitment_number = VALUES(recruitment_number),
             benefits = VALUES(benefits),
             information_source = VALUES(information_source),
@@ -201,8 +226,10 @@ def ensure_company_table(engine: Engine) -> None:
         information_source_id VARCHAR(20) NULL COMMENT '信息来源代码',
         source_name VARCHAR(255) NULL COMMENT '信息来源名称',
         company_name VARCHAR(255) NULL COMMENT '企业名称',
+        company_type VARCHAR(100) NULL COMMENT '企业类型，来源字段company_type',
         company_intro_html LONGTEXT NULL COMMENT '企业介绍HTML，来源字段bab271',
         company_intro_text LONGTEXT NULL COMMENT '去除HTML后的企业介绍',
+        contact_person VARCHAR(255) NULL COMMENT '联系人，来源字段aae004',
         contact_phone VARCHAR(255) NULL COMMENT '联系电话，来源字段aae005',
         detail_url VARCHAR(1000) NULL COMMENT '企业详情页地址',
         crawl_time DATETIME NULL COMMENT '最近成功抓取时间',
@@ -254,6 +281,10 @@ def load_company_targets(engine: Engine) -> list[dict[str, str]]:
               c.company_detail_id IS NULL
               OR c.company_intro_html IS NULL
               OR c.company_intro_html = ''
+              OR c.contact_person IS NULL
+              OR TRIM(c.contact_person) = ''
+              OR c.contact_phone IS NULL
+              OR TRIM(c.contact_phone) = ''
               {refresh_condition}
           )
         ORDER BY company_detail_id
@@ -306,6 +337,7 @@ def upsert_companies(
             company_name,
             company_intro_html,
             company_intro_text,
+            contact_person,
             contact_phone,
             detail_url,
             crawl_time
@@ -317,6 +349,7 @@ def upsert_companies(
             :company_name,
             :company_intro_html,
             :company_intro_text,
+            :contact_person,
             :contact_phone,
             :detail_url,
             :crawl_time
@@ -336,6 +369,10 @@ def upsert_companies(
             company_intro_text = COALESCE(
                 NULLIF(VALUES(company_intro_text), ''),
                 company_intro_text
+            ),
+            contact_person = COALESCE(
+                NULLIF(VALUES(contact_person), ''),
+                contact_person
             ),
             contact_phone = COALESCE(
                 NULLIF(VALUES(contact_phone), ''),
@@ -460,3 +497,123 @@ def mark_positions_offline(
             sql,
             [{"bcb009": position_id} for position_id in position_ids],
         )
+
+
+# ------------------------------ 企业类型填充 ------------------------------
+
+@database_retry
+def load_companies_without_type(engine: Engine) -> list[dict[str, Any]]:
+    """读取企业表中尚未填写企业类型的企业标识与名称。"""
+    sql = text(
+        f"""
+        SELECT id, company_name
+        FROM `{COMPANY_TABLE_NAME}`
+        WHERE company_name IS NOT NULL
+          AND TRIM(company_name) <> ''
+          AND (
+              company_type IS NULL
+              OR TRIM(company_type) = ''
+          )
+        ORDER BY id ASC
+        """
+    )
+    with engine.connect() as connection:
+        rows = connection.execute(sql).mappings().all()
+    return [
+        {
+            "id": row["id"],
+            "company_name": str(row["company_name"]).strip(),
+        }
+        for row in rows
+    ]
+
+
+@database_retry
+def lookup_company_types_by_name(
+    source_engine: Engine,
+    company_names: list[str],
+) -> dict[str, str]:
+    """按企业名称在正式库中查询企业类型。"""
+    if not company_names:
+        return {}
+
+    sql = text(
+        f"""
+        SELECT
+            `{SOURCE_COMPANY_NAME_COLUMN}` AS company_name,
+            MAX(`{SOURCE_COMPANY_TYPE_COLUMN}`) AS company_type
+        FROM `{SOURCE_COMPANY_TABLE_NAME}`
+        WHERE `{SOURCE_COMPANY_NAME_COLUMN}` IN :company_names
+          AND `{SOURCE_COMPANY_TYPE_COLUMN}` IS NOT NULL
+          AND TRIM(`{SOURCE_COMPANY_TYPE_COLUMN}`) <> ''
+        GROUP BY `{SOURCE_COMPANY_NAME_COLUMN}`
+        """
+    ).bindparams(bindparam("company_names", expanding=True))
+    with source_engine.connect() as connection:
+        rows = connection.execute(
+            sql,
+            {"company_names": list(company_names)},
+        ).mappings().all()
+
+    result: dict[str, str] = {}
+    for row in rows:
+        company_type = str(row["company_type"] or "").strip()
+        if company_type:
+            result[str(row["company_name"]).strip()] = company_type
+    return result
+
+
+@database_retry
+def lookup_company_types_by_credit_code(
+    source_engine: Engine,
+    credit_codes: list[str],
+) -> dict[str, str]:
+    """按统一社会信用代码在正式库中查询企业类型。"""
+    if not credit_codes:
+        return {}
+
+    sql = text(
+        f"""
+        SELECT
+            `{SOURCE_CREDIT_CODE_COLUMN}` AS credit_code,
+            MAX(`{SOURCE_COMPANY_TYPE_COLUMN}`) AS company_type
+        FROM `{SOURCE_COMPANY_TABLE_NAME}`
+        WHERE `{SOURCE_CREDIT_CODE_COLUMN}` IN :credit_codes
+          AND `{SOURCE_COMPANY_TYPE_COLUMN}` IS NOT NULL
+          AND TRIM(`{SOURCE_COMPANY_TYPE_COLUMN}`) <> ''
+        GROUP BY `{SOURCE_CREDIT_CODE_COLUMN}`
+        """
+    ).bindparams(bindparam("credit_codes", expanding=True))
+    with source_engine.connect() as connection:
+        rows = connection.execute(
+            sql,
+            {"credit_codes": list(credit_codes)},
+        ).mappings().all()
+
+    result: dict[str, str] = {}
+    for row in rows:
+        company_type = str(row["company_type"] or "").strip()
+        if company_type:
+            result[str(row["credit_code"]).strip()] = company_type
+    return result
+
+
+@database_retry
+def update_company_types(
+    engine: Engine,
+    company_types: list[dict[str, Any]],
+) -> int:
+    """把企业类型写回企业表，已填写的类型不会被空值覆盖。"""
+    if not company_types:
+        return 0
+
+    sql = text(
+        f"""
+        UPDATE `{COMPANY_TABLE_NAME}`
+        SET company_type = COALESCE(NULLIF(:company_type, ''), company_type)
+        WHERE id = :id
+        """
+    )
+    with engine.begin() as connection:
+        connection.execute(sql, company_types)
+    return len(company_types)

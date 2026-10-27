@@ -81,12 +81,14 @@ OUTPUT_FIELDS = [
     ("link", "_detail_link"),
     ("学历要求", "aac011Name"),
     ("工作经验要求", "aae162Name"),
-    ("工作性质", "acb239Name"),
+    ("工作性质", "_employment_type"),
+    ("招聘类型", "_recruitment_type"),
     ("招聘人数", "acb240"),
     ("福利待遇", "bcb182Name"),
     ("信息来源", "bze433Name"),
     ("信息来源代码", "bze433"),
     ("是否在招", "_is_active"),
+    ("_原始工作性质", "acb239Name"),
 ]
 
 
@@ -137,6 +139,20 @@ async def get_positions(
     return page, payload["data"]["records"]
 
 
+def split_acb239_name(value: Any) -> tuple[str | None, str | None]:
+    """拆分acb239Name：工作性质取用工形式，招聘类型区分校招与社招。
+
+    官网岗位的工作性质只标注校招，校招属于全职用工，因此工作性质记为全职；
+    招聘类型在非校招时统一记为社招。
+    """
+    name = str(value or "").strip()
+    if not name:
+        return None, "社招"
+    if "校招" in name or "校园招聘" in name:
+        return "全职", "校招"
+    return name, "社招"
+
+
 def extract_position(record: dict[str, Any]) -> dict[str, Any]:
     """从原始记录中提取需要入库的字段。"""
     result = {
@@ -147,6 +163,11 @@ def extract_position(record: dict[str, Any]) -> dict[str, Any]:
     # 刚从在招岗位列表抓取到的数据，初始化为1；后续入库后由定时任务更新。
     result["是否在招"] = 1
     result["岗位要求"] = ""
+
+    # acb239Name包含全职、实习、校招、见习四种类型，按规则拆分到两个字段。
+    result["工作性质"], result["招聘类型"] = split_acb239_name(
+        result.pop("_原始工作性质")
+    )
 
     company_detail_id = str(result["企业详情ID"] or "").strip()
     position_id = str(result["职位ID"] or "").strip()

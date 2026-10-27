@@ -86,6 +86,15 @@ COMPANY_REFRESH_DAYS = 30
 # 企业详情访问预检的抽样数量；当前脚本暂未使用，保留供预检功能使用。
 COMPANY_ACCESS_PREFLIGHT_LIMIT = 5
 
+# ------------------------------ 招聘平台登录态 ------------------------------
+
+# 是否启用登录态请求企业详情。
+# 未登录时企业详情接口不返回联系人和手机号，需要登录令牌才能获取。
+COMPANY_USE_AUTH_TOKEN = True
+
+# 登录令牌的环境变量名；令牌从 .env 中读取，需手动从浏览器复制。
+COMPANY_AUTH_TOKEN_ENV_NAME = "RECRUITMENT_AUTH_TOKEN"
+
 # ------------------------------ 岗位状态检查 ------------------------------
 
 # 同时请求岗位详情接口检查在招状态的最大任务数。
@@ -135,3 +144,27 @@ PROVINCES = [
     ("宁夏回族自治区", "640000000000"),
     ("新疆维吾尔自治区", "650000000000"),
 ]
+
+# ------------------------------ 正式库企业类型填充 ------------------------------
+
+# 正式库中存放企业工商信息的表名称。
+SOURCE_COMPANY_TABLE_NAME = "raw_company_info"
+
+# 正式库中企业名称字段。
+SOURCE_COMPANY_NAME_COLUMN = "company_name"
+
+# 正式库中企业统一社会信用代码字段。
+SOURCE_CREDIT_CODE_COLUMN = "credit_code"
+
+# 正式库中企业类型字段。
+SOURCE_COMPANY_TYPE_COLUMN = "company_type"
+
+# 每次向正式库批量查询企业数量。
+COMPANY_TYPE_QUERY_BATCH_SIZE = 500
+
+# 每次向测试库批量写入企业类型的数量。
+COMPANY_TYPE_UPDATE_BATCH_SIZE = 500
+
+# 企业名称看起来像统一社会信用代码时的判定正则。
+# 招聘平台存在把信用代码填进企业名称的情况，这类需改用信用代码关联。
+CREDIT_CODE_PATTERN = r"^[0-9A-Z]{15,18}$"

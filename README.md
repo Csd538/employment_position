@@ -39,12 +39,15 @@ source .venv/bin/activate
 Windows 和 Linux 使用相同命令，无需手动激活虚拟环境。建议按照以下顺序执行：
 
 ```bash
-# 1. 抓取岗位并直接入库
+# ① 抓岗位
 uv run python -m employment_position.server.guangdong_public_job_platform.get_all_positions
 
-# 2. 根据岗位表补充企业详情
+# ② 补企业详情（联系人 + 手机号）
 uv run python -m employment_position.server.guangdong_public_job_platform.recruitment_company_detail
 
-# 3. 检查在招岗位状态并更新已下架岗位
+# ③ 填企业类型
+uv run python -m employment_position.server.guangdong_public_job_platform.fill_company_type
+
+# ④ 查岗位上下架
 uv run python -m employment_position.server.guangdong_public_job_platform.recruitment_position_status
 ```

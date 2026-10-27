@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 from datetime import datetime
 from html.parser import HTMLParser
@@ -8,9 +9,11 @@ from urllib.parse import urlencode
 from sqlalchemy.engine import Engine
 
 from employment_position.util.config import (
+    COMPANY_AUTH_TOKEN_ENV_NAME,
     COMPANY_BATCH_SIZE,
     COMPANY_CONCURRENCY,
     COMPANY_REQUEST_INTERVAL_SECONDS,
+    COMPANY_USE_AUTH_TOKEN,
 )
 from employment_position.util.database import (
     create_database_engine,
@@ -45,6 +48,25 @@ HEADERS = {
         "Chrome/154.0.0.0 Safari/537.36"
     ),
 }
+
+
+def build_headers(token: str) -> dict[str, str]:
+    """构造企业详情请求头，带上登录令牌以获取联系人和手机号。"""
+    headers = dict(HEADERS)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def load_auth_token() -> str:
+    """读取登录令牌。
+
+    令牌需手动从浏览器复制后写入 .env 的 RECRUITMENT_AUTH_TOKEN，
+    获取方式：浏览器登录招聘平台后，在开发者工具的
+    Application -> Local Storage 中找到 vuex_integration-internet_localStorage
+    项，其 user.token 字段即为令牌。
+    """
+    return os.environ.get(COMPANY_AUTH_TOKEN_ENV_NAME, "").strip()
 
 
 class _TextExtractor(HTMLParser):
@@ -89,11 +111,14 @@ def html_to_text(html: str | None) -> str:
 
 
 
-async def get_company_data(company_detail_id: str) -> dict[str, Any]:
+async def get_company_data(
+    company_detail_id: str,
+    headers: dict[str, str],
+) -> dict[str, Any]:
     response = await async_request_with_proxy(
         method="GET",
         url=COMPANY_DETAIL_URL.format(bbb911=company_detail_id),
-        headers=HEADERS,
+        headers=headers,
     )
     payload = response.json()
     if not payload.get("success"):
@@ -105,13 +130,14 @@ async def get_company_data(company_detail_id: str) -> dict[str, Any]:
 async def get_company_detail(
     target: dict[str, str],
     semaphore: asyncio.Semaphore,
+    headers: dict[str, str],
 ) -> dict[str, Any]:
     company_detail_id = target["company_detail_id"]
     information_source_id = target["information_source_id"]
 
     async with semaphore:
         try:
-            detail_data = await get_company_data(company_detail_id)
+            detail_data = await get_company_data(company_detail_id, headers)
             intro_html = str(detail_data.get("bab271") or "")
             detail_url = (
                 COMPANY_PAGE_URL
@@ -134,6 +160,7 @@ async def get_company_detail(
                 "company_name": (detail_data.get("aab004") or target["company_name"]),
                 "company_intro_html": intro_html,
                 "company_intro_text": html_to_text(intro_html),
+                "contact_person": detail_data.get("aae004"),
                 "contact_phone": detail_data.get("aae005"),
                 "detail_url": detail_url,
                 "crawl_time": datetime.now(),
@@ -149,6 +176,19 @@ async def crawl_company_details(engine: Engine) -> None:
     if not targets:
         return
 
+    token = ""
+    if COMPANY_USE_AUTH_TOKEN:
+        token = load_auth_token()
+        if token:
+            logger.info(f"[{NAME}] 已加载登录令牌，将同时采集联系人和手机号")
+        else:
+            logger.warning(
+                f"[{NAME}] 未配置 {COMPANY_AUTH_TOKEN_ENV_NAME}，"
+                f"联系人和手机号将为空；请从浏览器 Local Storage 中复制 token "
+                f"并写入 .env 后重试"
+            )
+    headers = build_headers(token)
+
     semaphore = asyncio.Semaphore(COMPANY_CONCURRENCY)
     success_count = 0
     failure_count = 0
@@ -160,6 +200,7 @@ async def crawl_company_details(engine: Engine) -> None:
                 get_company_detail(
                     target,
                     semaphore,
+                    headers,
                 )
                 for target in batch
             ),
